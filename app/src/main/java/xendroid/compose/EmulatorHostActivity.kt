@@ -412,7 +412,7 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
             }
         }
         setContentView(compose)
-        sv.requestFocus()
+        // sv.requestFocus()
     }
 
     /** Honor the SAME legacy enable_vibrator pref AND the new globals flag (new wins when
