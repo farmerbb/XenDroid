@@ -292,6 +292,7 @@ storage_root = ""                                 	# Root path for persistent in
 
 
 [UI]
+android_message_box = true                        	# Show a game's message boxes as an Android dialog, instead of answering them with the button the game pre-selected.
 android_soft_keyboard = true                      	# Show the Android keyboard when a game asks for text input, instead of answering the prompt with its default text.
 headless = true                                  	# Don't display any UI, using defaults for prompts as needed.
 profiler_dpi_scaling = false                      	# Apply window DPI scaling to the profiler.

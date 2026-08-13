@@ -24,16 +24,13 @@ object SettingsSchema {
             b("Vulkan", "vulkan_async_skip_draws", "Async skip draws", true),
             b("Vulkan", "vulkan_placeholder_pipelines", "Placeholder pipelines", false),
             b("Vulkan", "vulkan_dynamic_pipeline_state", "Extended dynamic state", true),
-            // Numeric thread count (0 = synchronous, 1..5 = explicit) -> a slider, not a
-            // dropdown. Native cvar also accepts -1 (auto = 75% of cores), but the template
-            // ships 4 and a 0..5 slider is the intended UX.
+            // A slider, not a dropdown: 0 = synchronous, 1..5 = explicit. The native cvar also
+            // accepts -1 (auto), but a 0..5 slider is the intended UX.
             i("Vulkan", "vulkan_pipeline_creation_threads", "Pipeline creation threads", 4, 0, 5),
             Action("Vulkan", "vulkan_lib_path", "Custom Vulkan driver", "", desc("vulkan_lib_path")),
             b("Vulkan", "adrenotools_force_max_clocks", "Force max GPU clocks (adrenotools)", false),
-            // TU_DEBUG flags for the Turnip (Mesa freedreno) driver. Empty = driver default
-            // (GMEM/tiled, fast); 'sysmem' forces untiled rendering (much slower) but avoids a
-            // class of Adreno GPU hangs. Applied at vkCreateInstance, so it takes effect on the
-            // next game launch.
+            // 'sysmem' forces untiled rendering (much slower) but avoids a class of Adreno GPU
+            // hangs. Applied at vkCreateInstance, so it takes effect on the next game launch.
             l("Vulkan", "turnip_debug", "Turnip debug mode", "sysmem",
                 "" to "None (no TU_DEBUG flags, GMEM)", "sysmem" to "sysmem (untiled, slower)",
                 "sysmem,nolrz" to "sysmem + nolrz (LRZ off, perf diagnostic)",
@@ -42,9 +39,8 @@ object SettingsSchema {
             b("Vulkan", "vulkan_resolve_to_texture_promote", "Resolve-to-texture: promote", true),
             b("Vulkan", "vulkan_resolve_to_texture", "Resolve-to-texture: store", true),
             b("Vulkan", "vulkan_resolve_to_texture_serve", "Resolve-to-texture: skip upload", true),
-            // Cross-draw texture/sampler descriptor-set reuse (perf). Master toggle gates reuse
-            // on/off; the edge toggle (only when reuse is on) picks edge's bitmask gate vs
-            // XenDroid's content-hash gate for A/B. Three-way: off / on+hash / on+edge.
+            // Master toggle gates cross-draw descriptor-set reuse; the edge toggle (only when
+            // reuse is on) picks edge's bitmask gate vs the content-hash gate for A/B.
             b("Vulkan", "vulkan_cache_texture_descriptors", "Cache texture descriptors", true),
             b("Vulkan", "vulkan_texture_descriptor_reuse_edge", "Texture descriptor gate: edge (off = hash)", false),
         )),
@@ -73,6 +69,7 @@ object SettingsSchema {
             b("UI", "storage_selection_dialog", "Storage selection dialog", false),
             b("UI", "headless", "Headless", true),
             b("UI", "android_soft_keyboard", "Android keyboard for game text input", true),
+            b("UI", "android_message_box", "Android dialog for game message boxes", true),
         )),
 
         SettingsCategory("Storage", listOf(
@@ -82,11 +79,8 @@ object SettingsSchema {
 
         SettingsCategory("Kernel", listOf(
             b("Kernel", "staging_mode", "Staging mode", false),
-            // Cooperative fiber scheduler. Guest threads become fibers driven by an
-            // in-kernel scheduler instead of one host OS thread each. Takes effect on
-            // the next game launch.
+            // Takes effect on the next game launch.
             b("Kernel", "guest_scheduler", "Guest scheduler (cooperative fibers)", true),
-            // Timeslice a fiber may run before yielding at its next JIT safepoint.
             // Only meaningful with the guest scheduler on.
             i("Kernel", "guest_scheduler_quantum_us", "Guest scheduler quantum (us)", 1000, 250, 8000),
             b("Kernel", "guest_scheduler_stats", "Guest scheduler stats logging", false),
@@ -132,43 +126,35 @@ object SettingsSchema {
             b("Display", "present_render_pass_clear", "Present render-pass clear", true),
             l("Display", "postprocess_antialiasing", "Antialiasing", "",
                 "none" to "none", "fxaa" to "fxaa", "fxaa_extreme" to "fxaa_extreme"), // "" => none
-            // host_present_from_non_ui_thread intentionally NOT exposed: it MUST be true on
-            // Android (forced in xendroid_emu.cpp after config load) -- false black-screens the
-            // app, so there is no valid user choice to make.
+            // host_present_from_non_ui_thread intentionally NOT exposed: forced true on Android
+            // (false black-screens the app), so there is no valid user choice to make.
             b("Display", "show_debug_overlay", "Show debug overlay", false),
         )),
 
         SettingsCategory("GPU", listOf(
-            // Host presentation cap. A dropdown rather than a slider: only a
-            // few values are meaningful, and "unlimited" needs to be an
-            // explicit choice rather than the bottom of a range.
+            // A dropdown, not a slider: only a few values are meaningful, and "unlimited"
+            // needs to be an explicit choice rather than the bottom of a range.
             l("GPU", "framerate_limit", "Frame rate limit", "60",
                 "60" to "60 FPS", "30" to "30 FPS", "45" to "45 FPS",
                 "90" to "90 FPS", "120" to "120 FPS", "0" to "Unlimited"),
             b("GPU", "guest_display_refresh_cap", "Cap guest display refresh (VSync)", true),
             b("GPU", "store_shaders", "Store shaders", true),
             b("GPU", "resolve_resolution_scale_fill_half_pixel_offset", "Resolve scale: fill half-pixel offset", true),
-            // readback_resolve is a STRING cvar (NOT a bool): which render-to-texture resolves
-            // are copied back into guest RAM. uma=no copy, the CPU reads the host-mapped shared
-            // memory directly - the only mode that works on Adreno, which cannot import guest RAM
-            // (cvar default); fast=copy only resolves the CPU reads back; all=copy every resolve;
-            // none=disable readback. The retired some/full modes now parse as uma.
+            // uma = no copy, the CPU reads host-mapped shared memory directly; the only mode
+            // that works on Adreno, which cannot import guest RAM. Retired some/full parse as uma.
             l("GPU", "readback_resolve", "Readback resolve", "uma",
                 "uma" to "UMA (direct map, no copy)",
                 "fast" to "Fast (copy CPU-read resolves)", "all" to "All (copy every resolve)",
                 "none" to "None (disabled)"),
-            // How guest occlusion queries (PM4 EVENT_WRITE_ZPD) are serviced. 'fake' fabricates a
-            // result with zero GPU-query overhead (fastest; some effects e.g. lens flares may look
-            // slightly wrong); 'fast'/'fast-alt' issue real async Vulkan queries without stalling;
-            // 'strict' issues a real query and stalls the command thread until the GPU answers (most
-            // accurate, slowest). Live (SetZPDMode) -- takes effect without relaunch.
+            // 'fake' fabricates a result (fastest; some effects may look slightly wrong);
+            // 'fast'/'fast-alt' issue async queries without stalling; 'strict' stalls the
+            // command thread until the GPU answers. Live (SetZPDMode) -- no relaunch needed.
             l("GPU", "occlusion_query", "Occlusion query mode", "fast",
                 "fake" to "Fake (no GPU query, fastest)", "fast" to "Fast (async query, no stall)",
                 "fast-alt" to "Fast-alt (async, precise zeros)", "strict" to "Strict (real query, stalls)"),
-            // Mid-frame command-buffer split: if >0, end+submit every N real draws so the GPU
-            // overlaps rendering with CPU command-building instead of idling until swap. 0 = one
-            // submission per frame (off). ~half the per-frame draw count is a good start; too-small
-            // values hurt tiled GPUs.
+            // Mid-frame command-buffer split: end+submit every N draws so the GPU overlaps
+            // rendering with CPU command-building instead of idling until swap. 0 = off;
+            // too-small values hurt tiled GPUs.
             i("GPU", "vulkan_mid_frame_submission_draws", "Mid-frame submission (draws, 0=off)", 1300, 0, 4096),
             b("GPU", "snorm16_render_target_full_range", "snorm16 render target full range", true),
             // min == the real TOML default (384); a higher floor would silently coerce the default up.
@@ -177,8 +163,8 @@ object SettingsSchema {
             l("GPU", "render_target_path", "Render target path", "performance",
                 "performance" to "performance", "accuracy" to "accuracy"),
             b("GPU", "half_pixel_offset", "Half-pixel offset", true),
-            // Upstream accuracy features that only a few titles need but cost
-            // shader performance in every title. Off = pre-upstream behaviour.
+            // Upstream accuracy features that only a few titles need but cost shader performance
+            // in every title. Off = pre-upstream behaviour.
             b("GPU", "texture_gradient_exp_bias", "Accuracy: per-axis gradient LOD bias", false),
             b("GPU", "texture_integer_num_format", "Accuracy: integer num_format texture scaling", false),
             b("GPU", "accurate_resolve_number_formats", "Accuracy: resolve number formats and gamma", false),
@@ -268,9 +254,8 @@ object SettingsSchema {
     val byKey: Map<String, Setting> = allSettings.associateBy { it.key }
 }
 
-// user_country: values 1..109 with 17 and 94 skipped; labels are ISO country codes
-// (107 entries). Order matches arrays.xml (es_arr_xconfig_user_country, transcribed
-// verbatim from app/src/main/res/values/arrays.xml). Default 103 = US.
+// user_country: values 1..109 with 17 and 94 skipped (107 entries). Order matches
+// arrays.xml (es_arr_xconfig_user_country). Default 103 = US.
 private val USER_COUNTRY_ISO: List<String> = listOf(
     "AE","AL","AM","AR","AT","AU","AZ","BE","BG","BH","BN","BO","BR","BY","BZ","CA",
     "CH","CL","CN","CO","CR","CZ","DE","DK","DO","DZ","EC","EE","EG","ES","FI","FO",

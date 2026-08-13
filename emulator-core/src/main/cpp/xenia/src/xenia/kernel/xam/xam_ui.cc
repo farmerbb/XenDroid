@@ -18,6 +18,7 @@
 #include "xenia/kernel/xam/xam_content_device.h"
 #include "xenia/kernel/xam/xam_private.h"
 #include "xenia/ui/file_picker.h"
+#include "xenia/ui/host_message_box.h"
 #include "xenia/ui/host_text_input.h"
 #include "xenia/ui/imgui_dialog.h"
 #include "xenia/ui/imgui_drawer.h"
@@ -457,7 +458,39 @@ static dword_result_t XamShowMessageBoxUi(
     buttons.push_back("OK");
   }
 
+  const bool passcode_mode =
+      (flags & XMBox_PASSCODEMODE) || (flags & XMBox_VERIFYPASSCODEMODE);
+
   X_RESULT result;
+  // Preferred over headless (like XamShowKeyboardUI): a provider means there is
+  // UI to ask with. Passcode entry is a different dialog, left to the paths
+  // below.
+  if (xe::ui::HasHostMessageBoxProvider() && !passcode_mode) {
+    xe::ui::HostMessageBoxRequest request;
+    request.title = title;
+    request.text = text;
+    request.buttons = buttons;
+    request.active_button = static_cast<uint32_t>(active_button);
+    request.flags = flags;
+
+    auto ui_scope = std::make_shared<HostDialogScope>(
+        kernel_state()->emulator()->input_system());
+
+    auto run = [request, ui_scope, result_ptr]() mutable -> X_RESULT {
+      struct Releaser {
+        std::shared_ptr<HostDialogScope>& scope;
+        ~Releaser() { scope.reset(); }
+      } releaser{ui_scope};
+      xe::ui::HostMessageBoxResult host_result;
+      // Unpresentable (teardown) falls back to the headless answer.
+      host_result.chosen_button = request.active_button;
+      xe::ui::RequestHostMessageBox(request, host_result);
+      result_ptr->ButtonPressed = host_result.chosen_button;
+      return X_ERROR_SUCCESS;
+    };
+    return xeXamDispatchHeadless(run, overlapped);
+  }
+
   if (cvars::headless) {
     // Auto-pick the focused button.
     auto run = [result_ptr, active_button]() -> X_RESULT {

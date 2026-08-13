@@ -1,17 +1,14 @@
 package xendroid.compose.settings
 
-/**
- * One-line, user-facing descriptions per setting name, shown as a long-press
- * tooltip. Sourced from the native cvar help strings (condensed); a few
- * app-only entries are written from usage. Injected into [Setting.desc] by the
- * schema helpers.
- */
+/** User-facing setting descriptions shown as a long-press tooltip, injected into
+ *  [Setting.desc] by the schema helpers. */
 object SettingDescriptions {
     val byName: Map<String, String> = mapOf(
         "accurate_resolve_number_formats" to "Handle signed/integer resolve destinations and gamma-decode 8_8_8_8_GAMMA sources; a few titles need it, but it enlarges every full resolve shader and costs significant frame rate on mobile GPUs",
         "adrenotools_force_max_clocks" to "Force the GPU to its maximum clocks via the custom driver; more speed, more heat and battery drain",
         "allow_incompatible_title_update" to "Applies title updates even when their signature doesn't match the game",
         "allow_plugins" to "Allows loading homebrew plugin/trainer XEX modules per title; experimental",
+        "android_message_box" to "Shows a game's own prompts (Xbox LIVE sign-in, save confirmations) as a dialog you answer. With this off the game is answered with whichever button it pre-selected",
         "android_soft_keyboard" to "Pops up the Android keyboard when a game asks you to type (gamertags, save names). With this off the game is answered with its own default text",
         "apply_patches" to "Applies user patch files to games when they load",
         "apply_title_update" to "Applies installed title updates when launching a game",

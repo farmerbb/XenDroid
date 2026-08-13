@@ -1,4 +1,4 @@
-package xendroid.compose.ui.disc
+package xendroid.compose.ui.messagebox
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -18,31 +18,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import xendroid.compose.Emulator
 import xendroid.compose.ui.panel.GuestPanelOption
 import xendroid.compose.ui.panel.GuestPanelOptions
 
 /**
- * Answers a guest disc-swap prompt (XamSwapDisc). An in-window Surface, not a Dialog:
+ * Answers a guest message box (XamShowMessageBoxUI). An in-window Surface, not a Dialog:
  * a Dialog takes window focus and trips the host's focus-loss pause. A guest thread blocks
- * until answered, so [onChoose]/[onCancel] must fire for every request. The guest ejects
- * before asking, so cancelling leaves the game with no disc. [selected] is driven by the
- * host because the D-pad arrives as hat axes that never reach a composable; Cancel is the
- * LAST option, index discCount.
+ * until answered, so [onChoose] must fire for every request (no cancel). [selected] is
+ * driven by the host activity because the D-pad arrives as hat axes that never reach a
+ * composable.
  */
 @Composable
-fun DiscSwapPanel(
-    request: Emulator.DiscSwapRequest,
+fun GuestMessageBoxPanel(
+    request: Emulator.MessageBoxRequest,
     selected: Int,
-    onChoose: (String) -> Unit,
-    onCancel: () -> Unit,
+    onChoose: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val labels = request.discLabels ?: emptyArray()
-    val paths = request.discPaths ?: emptyArray()
-    val count = minOf(labels.size, paths.size)
+    val buttons = request.buttons?.takeIf { it.isNotEmpty() } ?: arrayOf("OK")
 
     BoxWithConstraints(
         modifier
@@ -60,7 +55,7 @@ fun DiscSwapPanel(
             modifier = Modifier
                 .widthIn(max = 520.dp)
                 .fillMaxWidth()
-                // Bounded so the list scrolls instead of pushing Cancel offscreen.
+                // Bounded so a long body scrolls instead of pushing the buttons offscreen.
                 .heightIn(max = maxHeight - outerPadding * 2)
                 .padding(outerPadding),
             shape = MaterialTheme.shapes.large,
@@ -72,47 +67,31 @@ fun DiscSwapPanel(
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    Text(
-                        if (request.discNumber > 0) "Insert disc ${request.discNumber}"
-                        else "Insert disc",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    val message = request.message.orEmpty().trim()
-                    if (message.isNotEmpty()) {
-                        Text(
-                            message,
-                            maxLines = if (compact) 2 else 5,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (request.isError) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = if (compact) 4.dp else 8.dp),
-                        )
+                    val title = request.title.orEmpty().trim()
+                    if (title.isNotEmpty()) {
+                        Text(title, style = MaterialTheme.typography.titleMedium)
                     }
-
-                    if (count == 0) {
+                    val text = request.text.orEmpty().trim()
+                    if (text.isNotEmpty()) {
                         Text(
-                            "No discs for this title were found in the games folder.",
+                            text,
                             style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(top = if (compact) 8.dp else 16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = if (compact) 4.dp else 8.dp),
                         )
                     }
                 }
 
-                // Pinned, so a long list cannot hide Cancel.
+                // Full-width, not a Row: guest labels are whole sentences often enough
+                // to wrap badly.
                 GuestPanelOptions(Modifier.padding(top = if (compact) 8.dp else 16.dp)) {
-                    for (i in 0 until count) {
+                    for (i in buttons.indices) {
                         GuestPanelOption(
-                            label = labels[i],
+                            label = buttons[i].ifBlank { "OK" },
                             selected = i == selected,
-                            onClick = { onChoose(paths[i]) },
+                            onClick = { onChoose(i) },
                         )
                     }
-                    GuestPanelOption(
-                        label = "Cancel",
-                        selected = selected == count,
-                        onClick = onCancel,
-                    )
                 }
             }
         }
