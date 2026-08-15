@@ -246,8 +246,6 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     private fun installSurfaceView() {
         val sv = SurfaceView(this).apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
             holder.addCallback(this@EmulatorHostActivity)
             setOnGenericMotionListener { _, ev -> onGenericMotion(ev) }
         }
@@ -428,7 +426,6 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
             }
         }
         setContentView(compose)
-        sv.requestFocus()
     }
 
     /** Honors the legacy enable_vibrator pref too, so existing users keep their setting. */
