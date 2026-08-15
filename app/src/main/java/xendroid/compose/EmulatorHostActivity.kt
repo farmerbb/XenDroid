@@ -246,8 +246,8 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     private fun installSurfaceView() {
         val sv = SurfaceView(this).apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
+            // isFocusable = true
+            // isFocusableInTouchMode = true
             holder.addCallback(this@EmulatorHostActivity)
             setOnGenericMotionListener { _, ev -> onGenericMotion(ev) }
         }
