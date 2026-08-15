@@ -176,6 +176,10 @@ constexpr VkDescriptorPoolSize
     VulkanCommandProcessor::kDescriptorPoolSizeStorageBuffer = {
         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kLinkedTypeDescriptorPoolSetCount};
 
+constexpr VkDescriptorPoolSize
+    VulkanCommandProcessor::kDescriptorPoolSizeStorageImage = {
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kLinkedTypeDescriptorPoolSetCount};
+
 // 2x descriptors for texture images because of unsigned and signed bindings.
 constexpr VkDescriptorPoolSize
     VulkanCommandProcessor::kDescriptorPoolSizeTextures[2] = {
@@ -204,6 +208,12 @@ VulkanCommandProcessor::VulkanCommandProcessor(
               graphics_system->provider())
               ->vulkan_device(),
           &kDescriptorPoolSizeStorageBuffer, 1,
+          kLinkedTypeDescriptorPoolSetCount),
+      transient_descriptor_allocator_storage_image_(
+          static_cast<const ui::vulkan::VulkanProvider*>(
+              graphics_system->provider())
+              ->vulkan_device(),
+          &kDescriptorPoolSizeStorageImage, 1,
           kLinkedTypeDescriptorPoolSetCount),
       transient_descriptor_allocator_textures_(
           static_cast<const ui::vulkan::VulkanProvider*>(
@@ -3389,14 +3399,22 @@ VkDescriptorSet VulkanCommandProcessor::AllocateSingleTransientDescriptor(
             SingleTransientDescriptorLayout::kStorageBufferCompute ||
         transient_descriptor_layout ==
             SingleTransientDescriptorLayout::kStorageBufferFragment;
+    bool is_storage_image =
+        transient_descriptor_layout ==
+        SingleTransientDescriptorLayout::kStorageImageFragment;
     ui::vulkan::LinkedTypeDescriptorSetAllocator&
         transient_descriptor_allocator =
-            is_storage_buffer ? transient_descriptor_allocator_storage_buffer_
-                              : transient_descriptor_allocator_uniform_buffer_;
+            is_storage_image
+                ? transient_descriptor_allocator_storage_image_
+                : (is_storage_buffer
+                       ? transient_descriptor_allocator_storage_buffer_
+                       : transient_descriptor_allocator_uniform_buffer_);
     VkDescriptorPoolSize descriptor_count;
-    descriptor_count.type = is_storage_buffer
-                                ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-                                : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptor_count.type =
+        is_storage_image
+            ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+            : (is_storage_buffer ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                                 : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
     descriptor_count.descriptorCount = 1;
     descriptor_set = transient_descriptor_allocator.Allocate(
         GetSingleTransientDescriptorLayout(transient_descriptor_layout),
@@ -3685,6 +3703,7 @@ void VulkanCommandProcessor::BindExternalGraphicsPipeline(
                                              pipeline);
   current_external_graphics_pipeline_ = pipeline;
   current_guest_graphics_pipeline_ = nullptr;
+  current_guest_graphics_pipeline_handle_ = VK_NULL_HANDLE;
   current_guest_graphics_pipeline_layout_ = VK_NULL_HANDLE;
 }
 
@@ -4251,10 +4270,18 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
   // invalidation can be re-run after in-pass transfers replace the bound
   // pipeline (see below, after entering the render pass).
   auto bind_guest_graphics_pipeline = [&]() {
-  if (current_guest_graphics_pipeline_ != &pipeline->pipeline) {
+  // Bind the handle observed when this draw's bindings were decided
+  // (current_pipeline, loaded above), not the slot at replay time: the
+  // recorded descriptor sets cover only that pipeline's layout. A draw
+  // recorded while the slot was empty is dropped at replay even if the
+  // async creation finishes in between. De-dup on the handle, so the first
+  // draw after the slot fills (or swaps placeholder to real) re-records.
+  if (current_guest_graphics_pipeline_ != &pipeline->pipeline ||
+      current_guest_graphics_pipeline_handle_ != current_pipeline) {
     deferred_command_buffer_.CmdVkBindPipelineDeferred(
-        VK_PIPELINE_BIND_POINT_GRAPHICS, &pipeline->pipeline);
+        VK_PIPELINE_BIND_POINT_GRAPHICS, current_pipeline);
     current_guest_graphics_pipeline_ = &pipeline->pipeline;
+    current_guest_graphics_pipeline_handle_ = current_pipeline;
     current_external_graphics_pipeline_ = VK_NULL_HANDLE;
   }
   auto pipeline_layout = static_cast<const PipelineLayout*>(
@@ -6212,6 +6239,7 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
     // without emitting an end (it would land in the new, unrelated buffer).
     pass_ts_open_pair_ = UINT32_MAX;
     current_guest_graphics_pipeline_ = nullptr;
+    current_guest_graphics_pipeline_handle_ = VK_NULL_HANDLE;
     current_external_graphics_pipeline_ = VK_NULL_HANDLE;
     current_external_compute_pipeline_ = VK_NULL_HANDLE;
     current_guest_graphics_pipeline_layout_ = nullptr;
@@ -6741,6 +6769,7 @@ void VulkanCommandProcessor::ClearTransientDescriptorPools() {
   }
   single_transient_descriptors_used_.clear();
   transient_descriptor_allocator_storage_buffer_.Reset();
+  transient_descriptor_allocator_storage_image_.Reset();
   transient_descriptor_allocator_uniform_buffer_.Reset();
 }
 
@@ -7919,6 +7948,11 @@ bool VulkanCommandProcessor::UpdateBindings(const VulkanShader* vertex_shader,
             texture_cache->GetActiveBindingOrNullImageView(
                 texture_binding.fetch_constant, texture_binding.dimension,
                 bool(texture_binding.is_signed)))));
+        // The written descriptor also carries the image layout, which changes
+        // when a texture is promoted to a resolve destination mid-frame.
+        scratch.push_back(uint64_t(texture_cache->GetActiveBindingImageLayout(
+            texture_binding.fetch_constant, texture_binding.dimension,
+            bool(texture_binding.is_signed))));
       }
     }
     if (sampler_count) {
@@ -8091,7 +8125,9 @@ bool VulkanCommandProcessor::UpdateBindings(const VulkanShader* vertex_shader,
               texture_binding.fetch_constant, texture_binding.dimension,
               bool(texture_binding.is_signed));
       descriptor_image_info.imageLayout =
-          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+          texture_cache_->GetActiveBindingImageLayout(
+              texture_binding.fetch_constant, texture_binding.dimension,
+              bool(texture_binding.is_signed));
     }
   }
   size_t vertex_sampler_image_info_offset = descriptor_write_image_info_.size();
@@ -8114,7 +8150,9 @@ bool VulkanCommandProcessor::UpdateBindings(const VulkanShader* vertex_shader,
               texture_binding.fetch_constant, texture_binding.dimension,
               bool(texture_binding.is_signed));
       descriptor_image_info.imageLayout =
-          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+          texture_cache_->GetActiveBindingImageLayout(
+              texture_binding.fetch_constant, texture_binding.dimension,
+              bool(texture_binding.is_signed));
     }
   }
   size_t pixel_sampler_image_info_offset = descriptor_write_image_info_.size();

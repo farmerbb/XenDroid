@@ -97,6 +97,8 @@ class EmulatorSession {
     /** Effective show_debug_overlay (global + per-game override). The override lands on the
      *  detached boot thread, so callers must POLL this after boot. */
     fun showDebugOverlayEnabled(): Boolean = if (booted) core.show_debug_overlay_enabled() else false
+    fun showTouchOverlayEnabled(): Boolean = if (booted) core.show_touch_overlay_enabled() else true
+    fun setShowTouchOverlay(value: Boolean) { if (booted) core.set_show_touch_overlay(value) }
 
     /** A pending guest text prompt, or null. Holds a dispatch thread until [keyboardSubmit]
      *  answers, so every shown panel must be answered. */

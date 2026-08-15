@@ -43,6 +43,8 @@ public class Emulator extends xendroid.emulator.Emulator{
     // overlay applied by LoadGameConfig at boot). Poll post-boot: the per-game override
     // lands on the detached boot thread, so this only reflects it after the game loads.
     public native boolean show_debug_overlay_enabled();
+    public native boolean show_touch_overlay_enabled();
+    public native void set_show_touch_overlay(boolean value);
 
     // Mount the ISO at isoPath (a REAL host ISO path == game.launchUri in
     // real-path mode), walk its filesystem and pack it into a VERIFIED .zar at
@@ -63,6 +65,9 @@ public class Emulator extends xendroid.emulator.Emulator{
     // under their account XUID, everything else under machine XUID 0. Returns X_STATUS
     // (0 == success). Blocking VFS walk -- MUST be called off the main thread.
     public native int install_content(String srcPath, String contentRoot);
+    public native DiscContentItem[] list_disc_content(String discPath);
+    public native int install_disc_content(String discPath, String innerPath,
+                                           String contentRoot, String scratchDir);
 
     // Fraction 0..1 of the in-flight content install (0 when none). Poll for a bar.
     public native float installProgress();
@@ -188,6 +193,15 @@ public class Emulator extends xendroid.emulator.Emulator{
     public static class ContentItem {
         public String pkgDir;
         public String displayName;
+        public long size;
+    }
+
+    /** An installable package found inside a disc image, from list_disc_content. */
+    public static class DiscContentItem {
+        public String innerPath;
+        public String displayName;
+        public int titleId;
+        public int contentType;
         public long size;
     }
 

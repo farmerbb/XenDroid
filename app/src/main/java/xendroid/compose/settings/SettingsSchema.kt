@@ -94,6 +94,11 @@ object SettingsSchema {
             b("Kernel", "allow_incompatible_title_update", "Allow incompatible title update", true),
             b("Kernel", "apply_title_update", "Apply title update", true),
             b("Kernel", "kernel_debug_monitor", "Kernel debug monitor", false),
+            b("Kernel", "network_enabled", "Networking", true),
+        )),
+
+        SettingsCategory("Controller", listOf(
+            b("HID", "show_touch_overlay", "Show on-screen controller", true),
         )),
 
         SettingsCategory("HID", listOf(
@@ -236,6 +241,7 @@ object SettingsSchema {
         )),
 
         SettingsCategory("APU", listOf(
+            b("APU", "apu_pump_topup", "Audio pump top-up", true),
             i("Console", "xmp_default_volume", "XMP default volume", 70, 0, 100),
             b("APU", "ffmpeg_verbose", "FFmpeg verbose", false),
             b("APU", "mute", "Mute", false),

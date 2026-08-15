@@ -13,19 +13,19 @@ class SettingsSchemaTest {
 
     private val all = SettingsSchema.allSettings
 
-    // 98 Bool + 12 IntRange + 21 ListChoice + 2 Action = 133. Display|host_present_from_non_ui_thread
+    // 101 Bool + 12 IntRange + 21 ListChoice + 2 Action = 136. Display|host_present_from_non_ui_thread
     // is intentionally absent (forced true natively; not a valid user choice).
-    @Test fun total_entry_count_is_133() {
-        assertEquals(133, all.size)
+    @Test fun total_entry_count_is_136() {
+        assertEquals(136, all.size)
         assertEquals(
-            133,
+            136,
             all.count { it is Setting.Bool } + all.count { it is Setting.IntRange } +
                 all.count { it is Setting.ListChoice } + all.count { it is Setting.Action },
         )
     }
 
     @Test fun counts_by_type_match_verified_inventory() {
-        assertEquals(98, all.count { it is Setting.Bool })
+        assertEquals(101, all.count { it is Setting.Bool })
         assertEquals(12, all.count { it is Setting.IntRange })
         assertEquals(21, all.count { it is Setting.ListChoice })
         assertEquals(2, all.count { it is Setting.Action })
@@ -51,7 +51,7 @@ class SettingsSchemaTest {
 
     @Test fun categories_present_in_legacy_order() {
         val expected = listOf(
-            "Vulkan", "Video", "UI", "Storage", "Kernel", "HID", "Memory", "XConfig",
+            "Vulkan", "Video", "UI", "Storage", "Kernel", "Controller", "HID", "Memory", "XConfig",
             "Display", "GPU", "CPU", "Logging", "Content", "General", "APU",
         )
         assertEquals(expected, SettingsSchema.categories.map { it.title })
