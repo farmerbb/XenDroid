@@ -109,7 +109,24 @@ public class Emulator {
     public native void setup_surface(Surface sf);
     public native void boot() throws Emulator.BootException;
 
-    public native void key_event(int key_code,boolean pressed,int value);
+    public native void key_event(int device_slot,int key_code,boolean pressed,int value);
+    // Returns the device slot to pass to key_event, or -1 when the driver is full
+    // or the emulator has not booted.
+    public native int input_attach_device(String stable_id,String display_name,int subtype,int preferred_slot);
+    public native void input_detach_device(int device_slot);
+    public native boolean input_bind_slot(int guest_slot,int device_slot);
+    public native void input_unbind_slot(int guest_slot);
+    public native InputDeviceInfo[] input_list_devices();
+    /** Motor speeds per device slot as left/right pairs, 0-65535. */
+    public native int[] input_vibration_state();
+
+    /** One attached pad and the guest slot it feeds; guest_slot -1 = unmapped. */
+    public static class InputDeviceInfo{
+        public int device_slot;
+        public String stable_id;
+        public String display_name;
+        public int guest_slot;
+    }
 
     public native void quit();
 

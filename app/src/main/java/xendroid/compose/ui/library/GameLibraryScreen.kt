@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import xendroid.compose.ui.profile.SignedInBadge
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -113,7 +114,7 @@ fun GameLibraryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Library") },
+                title = { SignedInBadge(onClick = onOpenProfiles) },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
@@ -134,10 +135,6 @@ fun GameLibraryScreen(
                         DropdownMenuItem(
                             text = { Text("Install content") },
                             onClick = { menuOpen = false; onOpenInstallContent() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Profiles") },
-                            onClick = { menuOpen = false; onOpenProfiles() },
                         )
                         DropdownMenuItem(
                             text = { Text("Key mapping") },

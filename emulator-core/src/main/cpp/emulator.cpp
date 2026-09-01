@@ -460,8 +460,69 @@ static void j_setup_surface(JNIEnv* env,jobject self,jobject surface){
     }
 }
 
-static void j_key_event(JNIEnv* env,jobject self,jint key_code,jboolean pressed,jint value){
-    ae::key_event(key_code,pressed,value);
+static void j_key_event(JNIEnv* env,jobject self,jint device_slot,jint key_code,jboolean pressed,jint value){
+    ae::key_event(device_slot,key_code,pressed,value);
+}
+
+static jint j_input_attach_device(JNIEnv* env,jobject self,jstring stable_id,jstring display_name,jint subtype,jint preferred_slot){
+    const char* stable_id_chars=stable_id?env->GetStringUTFChars(stable_id,nullptr):nullptr;
+    const char* display_name_chars=display_name?env->GetStringUTFChars(display_name,nullptr):nullptr;
+    const jint slot=ae::input_attach_device(stable_id_chars,display_name_chars,subtype,preferred_slot);
+    if(stable_id_chars) env->ReleaseStringUTFChars(stable_id,stable_id_chars);
+    if(display_name_chars) env->ReleaseStringUTFChars(display_name,display_name_chars);
+    return slot;
+}
+
+static void j_input_detach_device(JNIEnv* env,jobject self,jint device_slot){
+    ae::input_detach_device(device_slot);
+}
+
+static jboolean j_input_bind_slot(JNIEnv* env,jobject self,jint guest_slot,jint device_slot){
+    return ae::input_bind_slot(guest_slot,device_slot)?JNI_TRUE:JNI_FALSE;
+}
+
+static void j_input_unbind_slot(JNIEnv* env,jobject self,jint guest_slot){
+    ae::input_unbind_slot(guest_slot);
+}
+
+static jintArray j_input_vibration_state(JNIEnv* env,jobject self){
+    const auto state=ae::input_vibration_state();
+    jintArray out=env->NewIntArray(jsize(state.size()));
+    if(!out || state.empty()){
+        return out;
+    }
+    std::vector<jint> values(state.begin(),state.end());
+    env->SetIntArrayRegion(out,0,jsize(values.size()),values.data());
+    return out;
+}
+
+static jobjectArray j_input_list_devices(JNIEnv* env,jobject self){
+    const auto devices=ae::input_list_devices();
+    jclass cls=env->FindClass("xendroid/emulator/Emulator$InputDeviceInfo");
+    if(!cls){
+        return nullptr;
+    }
+    jmethodID ctor=env->GetMethodID(cls,"<init>","()V");
+    jfieldID fid_device_slot=env->GetFieldID(cls,"device_slot","I");
+    jfieldID fid_stable_id=env->GetFieldID(cls,"stable_id","Ljava/lang/String;");
+    jfieldID fid_display_name=env->GetFieldID(cls,"display_name","Ljava/lang/String;");
+    jfieldID fid_guest_slot=env->GetFieldID(cls,"guest_slot","I");
+    jobjectArray out=env->NewObjectArray(jsize(devices.size()),cls,nullptr);
+    for(size_t i=0;i<devices.size();i++){
+        jobject item=env->NewObject(cls,ctor);
+        env->SetIntField(item,fid_device_slot,devices[i].device_slot);
+        jstring stable_id=env->NewStringUTF(devices[i].stable_id.c_str());
+        jstring display_name=env->NewStringUTF(devices[i].display_name.c_str());
+        env->SetObjectField(item,fid_stable_id,stable_id);
+        env->SetObjectField(item,fid_display_name,display_name);
+        env->SetIntField(item,fid_guest_slot,devices[i].guest_slot);
+        env->SetObjectArrayElement(out,jsize(i),item);
+        env->DeleteLocalRef(stable_id);
+        env->DeleteLocalRef(display_name);
+        env->DeleteLocalRef(item);
+    }
+    env->DeleteLocalRef(cls);
+    return out;
 }
 
 static void j_pause(JNIEnv* env,jobject self){
@@ -494,7 +555,13 @@ int register_Emulator(JNIEnv* env){
             { "setup_game_path", "(Lxendroid/emulator/Emulator$Path;)V", (void *) j_setup_game_path },
             { "setup_surface", "(Landroid/view/Surface;)V", (void *) j_setup_surface },
             { "boot", "()V", (void *) j_boot },
-            { "key_event", "(IZI)V", (void *) j_key_event },
+            { "key_event", "(IIZI)V", (void *) j_key_event },
+            { "input_attach_device", "(Ljava/lang/String;Ljava/lang/String;II)I", (void *) j_input_attach_device },
+            { "input_detach_device", "(I)V", (void *) j_input_detach_device },
+            { "input_bind_slot", "(II)Z", (void *) j_input_bind_slot },
+            { "input_unbind_slot", "(I)V", (void *) j_input_unbind_slot },
+            { "input_vibration_state", "()[I", (void *) j_input_vibration_state },
+            { "input_list_devices", "()[Lxendroid/emulator/Emulator$InputDeviceInfo;", (void *) j_input_list_devices },
             { "quit", "()V", (void *) j_quit },
             { "is_running", "()Z", (void *) j_is_running },
             { "is_paused", "()Z", (void *) j_is_paused },

@@ -30,6 +30,11 @@ DEFINE_string(logged_profile_slot_0_xuid, "",
 DEFINE_string(logged_profile_slot_0_xuid, "",
               "XUID of the profile to load on boot in slot 0", "Profiles");
 #endif
+DEFINE_bool(ask_players_on_start, true,
+            "Ask which profile each controller plays as when more than one is "
+            "connected. Read by the frontend, not the kernel.",
+            "HID");
+
 DEFINE_string(logged_profile_slot_1_xuid, "",
               "XUID of the profile to load on boot in slot 1", "Profiles");
 DEFINE_string(logged_profile_slot_2_xuid, "",

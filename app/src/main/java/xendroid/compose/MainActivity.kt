@@ -17,7 +17,15 @@ import xendroid.compose.core.FrontendLaunch
 import xendroid.compose.ui.library.ACTION_LAUNCH_GAME
 import xendroid.compose.ui.library.EXTRA_GAME_URI
 import xendroid.compose.core.SessionLogs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.remember
+import xendroid.compose.gamepad.PadProfiles
+import xendroid.compose.gamepad.PlayerAssignment
+import xendroid.compose.gamepad.PlayerSetup
+import xendroid.compose.gamepad.rememberConnectedPads
 import xendroid.compose.ui.AppNavHost
+import xendroid.compose.ui.players.PlayerSetupDialog
 import xendroid.compose.ui.theme.xendroidTheme
 import xendroid.compose.settings.ConfigStore
 import xendroid.compose.settings.seedTouchOverlayDefault
@@ -77,6 +85,42 @@ class MainActivity : ComponentActivity() {
             xendroidTheme {
 
                 AppNavHost(container)
+
+                // Who plays as whom, re-decided whenever a controller comes or
+                // goes. One controller keeps the old behaviour: it just drives the
+                // signed-in profile.
+                var playerSetup by remember { mutableStateOf<List<PlayerAssignment>?>(null) }
+                var playerProfiles by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+                val pads = rememberConnectedPads()
+                LaunchedEffect(pads.joinToString(",") { it.descriptor }) {
+                    if (frontendGame != null) return@LaunchedEffect
+                    val rows = withContext(Dispatchers.IO) {
+                        EmulatorRuntime.ensureLoaded()
+                        if (!PadProfiles.askOnStart(applicationContext)) return@withContext null
+                        if (pads.size < 2) {
+                            PlayerSetup.applySolo(applicationContext)
+                            return@withContext null
+                        }
+                        PlayerSetup.ensureEnoughProfiles(applicationContext)
+                        playerProfiles = PlayerSetup.profiles()
+                        PlayerSetup.defaults(applicationContext)
+                    }
+                    playerSetup = rows
+                }
+                playerSetup?.let { rows ->
+                    PlayerSetupDialog(
+                        pads = pads,
+                        profiles = playerProfiles,
+                        initial = rows,
+                        onConfirm = { chosen ->
+                            playerSetup = null
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                PlayerSetup.apply(applicationContext, chosen)
+                            }
+                        },
+                        onDismiss = { playerSetup = null },
+                    )
+                }
 
                 LaunchedEffect(Unit) {
                     if (frontendGame != null) return@LaunchedEffect

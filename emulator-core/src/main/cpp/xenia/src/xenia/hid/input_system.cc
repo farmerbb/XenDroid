@@ -27,6 +27,10 @@ namespace xe {
 namespace hid {
 
 DEFINE_bool(vibration, true, "Toggle controller vibration.", "HID");
+DEFINE_uint32(vibration_level, 100,
+              "Controller vibration strength, as a percentage of what the game "
+              "asks for. Allowed range [0-100].",
+              "HID");
 
 DEFINE_double(left_stick_deadzone_percentage, 0.0,
               "Defines deadzone level for left stick. Allowed range [0.0-1.0].",
@@ -348,10 +352,16 @@ X_INPUT_VIBRATION InputSystem::ModifyVibrationLevel(
     X_INPUT_VIBRATION* vibration) {
   X_INPUT_VIBRATION modified_vibration = *vibration;
   if (cvars::vibration) {
+    const uint32_t level = std::min<uint32_t>(cvars::vibration_level, 100);
+    if (level < 100) {
+      modified_vibration.left_motor_speed = uint16_t(
+          uint32_t(modified_vibration.left_motor_speed) * level / 100);
+      modified_vibration.right_motor_speed = uint16_t(
+          uint32_t(modified_vibration.right_motor_speed) * level / 100);
+    }
     return modified_vibration;
   }
 
-  // TODO(Gliniak): Use modifier instead of boolean value.
   modified_vibration.left_motor_speed = 0;
   modified_vibration.right_motor_speed = 0;
   return modified_vibration;

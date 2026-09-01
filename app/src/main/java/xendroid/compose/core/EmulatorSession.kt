@@ -79,9 +79,43 @@ class EmulatorSession {
      *  signed short magnitude for thumbsticks. Dropped until boot() has run: native key_event
      *  unconditionally derefs g_windowed_app_ref, null until the detached boot thread sets it
      *  (a controller press during the boot splash would crash). */
-    fun keyEvent(keyCode: Int, pressed: Boolean, value: Int) {
+    fun keyEvent(deviceSlot: Int, keyCode: Int, pressed: Boolean, value: Int) {
+        if (!booted || deviceSlot < 0) return
+        core.key_event(deviceSlot, keyCode, pressed, value)
+    }
+
+    /** -1 when not booted or the driver is full. */
+    fun attachInputDevice(stableId: String, displayName: String, subtype: Int, preferredSlot: Int): Int {
+        if (!booted) return -1
+        return runCatching { core.input_attach_device(stableId, displayName, subtype, preferredSlot) }
+            .getOrDefault(-1)
+    }
+
+    fun detachInputDevice(deviceSlot: Int) {
+        if (!booted || deviceSlot < 0) return
+        runCatching { core.input_detach_device(deviceSlot) }
+    }
+
+    fun bindInputSlot(guestSlot: Int, deviceSlot: Int) {
         if (!booted) return
-        core.key_event(keyCode, pressed, value)
+        runCatching { core.input_bind_slot(guestSlot, deviceSlot) }
+    }
+
+    fun unbindInputSlot(guestSlot: Int) {
+        if (!booted) return
+        runCatching { core.input_unbind_slot(guestSlot) }
+    }
+
+    fun vibrationState(): IntArray {
+        if (!booted) return IntArray(0)
+        return runCatching { core.input_vibration_state() ?: IntArray(0) }
+            .getOrDefault(IntArray(0))
+    }
+
+    fun listInputDevices(): List<xendroid.emulator.Emulator.InputDeviceInfo> {
+        if (!booted) return emptyList()
+        return runCatching { core.input_list_devices()?.toList() ?: emptyList() }
+            .getOrDefault(emptyList())
     }
 
     // ---- Debug stats (UI-thread polled; reads native lock-free atomics) ----

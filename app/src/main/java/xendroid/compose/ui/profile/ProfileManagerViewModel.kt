@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xendroid.compose.core.ContentPaths
+import xendroid.compose.gamepad.GamepadDevice
+import xendroid.compose.gamepad.PadProfiles
+import xendroid.compose.gamepad.PlayerSetup
+import xendroid.compose.gamepad.connectedGamepads
 import xendroid.compose.core.EmulatorRuntime
 import xendroid.compose.core.Gamertag
 import xendroid.compose.core.ProfilePaths
@@ -30,8 +34,21 @@ class ProfileManagerViewModel(
         val language: Int,
         val country: Int,
         val hasAvatar: Boolean,
-        val isActive: Boolean,
-    )
+        /** Slot 0 is player 1. */
+        val slot: Int?,
+        /** Connected controller playing as this profile, null for none. */
+        val controller: GamepadDevice? = null,
+        /** True when [controller] was attached by hand rather than inferred from
+         *  the player slot. Only an attached one can be detached. */
+        val controllerAttached: Boolean = false,
+    ) {
+        val isActive: Boolean get() = slot != null
+    }
+
+    companion object {
+        /** Xenia signs in at most XUserMaxUserCount profiles, one per guest slot. */
+        const val SLOT_COUNT = 4
+    }
 
     sealed interface ListState {
         data object Loading : ListState
@@ -64,15 +81,20 @@ class ProfileManagerViewModel(
                 ?: return@withContext ListState.Error("Emulator not loaded.")
             val root = ContentPaths.contentRoot().absolutePath
             try {
-                val active = activeXuid()
-                val profiles = emu.list_profiles(root)?.map {
+                val slots = slotXuids()
+                val padsBySlot = PlayerSetup.orderedPads(appContext)
+                val profiles = emu.list_profiles(root)?.map { info ->
+                    val slot = slots.indexOfFirst { it.equals(info.xuid, ignoreCase = true) }
+                        .takeIf { it >= 0 }
                     ProfileEntry(
-                        xuid = it.xuid,
-                        gamertag = it.gamertag ?: "",
-                        language = it.language,
-                        country = it.country,
-                        hasAvatar = it.hasAvatar,
-                        isActive = it.xuid.equals(active, ignoreCase = true),
+                        xuid = info.xuid,
+                        gamertag = info.gamertag ?: "",
+                        language = info.language,
+                        country = info.country,
+                        hasAvatar = info.hasAvatar,
+                        slot = slot,
+                        controller = controllerFor(info.xuid, slot, padsBySlot),
+                        controllerAttached = PadProfiles.padFor(appContext, info.xuid) != null,
                     )
                 }?.sortedBy { it.gamertag.lowercase() }
                     ?: return@withContext ListState.Error("Couldn't read profiles.")
@@ -128,9 +150,20 @@ class ProfileManagerViewModel(
             }
         }
 
-    fun setActive(xuid: String) = viewModelScope.launch {
-        withContext(Dispatchers.IO) { writeActiveXuid(xuid.uppercase()) }
-        _opState.value = OpState.Done("Active profile set. Applies on next game launch.")
+    /** A blank xuid empties the slot. Takes effect at the next game start: xenia
+     *  signs profiles in while the emulator boots. */
+    fun assignSlot(slot: Int, xuid: String) = viewModelScope.launch {
+        withContext(Dispatchers.IO) {
+            val slots = slotXuids().toMutableList()
+            val id = xuid.uppercase()
+            if (id.isNotEmpty()) {
+                for (i in slots.indices) {
+                    if (slots[i].equals(id, ignoreCase = true)) slots[i] = ""
+                }
+            }
+            slots[slot] = id
+            writeSlots(slots)
+        }
         refresh()
     }
 
@@ -141,7 +174,12 @@ class ProfileManagerViewModel(
             if (!ProfilePaths.XUID_REGEX.matches(id)) return@withContext false
             val dir = File(ContentPaths.contentRoot(), id)
             val removed = dir.deleteRecursively()
-            if (activeXuid().equals(id, ignoreCase = true)) writeActiveXuid("")
+            val slots = slotXuids().toMutableList()
+            var changed = false
+            for (i in slots.indices) {
+                if (slots[i].equals(id, ignoreCase = true)) { slots[i] = ""; changed = true }
+            }
+            if (changed) writeSlots(slots)
             removed
         }
         if (ok) {
@@ -152,19 +190,55 @@ class ProfileManagerViewModel(
         }
     }
 
-    private fun activeXuid(): String {
+    /** The pad playing as this profile: the one attached to it, else whichever
+     *  pad drives the player slot it is signed in to - the signed-in profile has a
+     *  controller whether or not anyone attached one by hand. A pad already
+     *  attached to some other profile never stands in. */
+    private fun controllerFor(
+        xuid: String,
+        slot: Int?,
+        padsBySlot: List<GamepadDevice>,
+    ): GamepadDevice? {
+        PadProfiles.padFor(appContext, xuid)?.let { return it }
+        val pad = slot?.let { padsBySlot.getOrNull(it) } ?: return null
+        return pad.takeIf { PadProfiles.choiceFor(appContext, it.descriptor) == null }
+    }
+
+    /** One controller per profile and one profile per controller, so attaching
+     *  takes the pad off whatever it was playing as. */
+    fun attachController(xuid: String, descriptor: String?) = viewModelScope.launch {
+        withContext(Dispatchers.IO) {
+            connectedGamepads().forEach { pad ->
+                if (PadProfiles.choiceFor(appContext, pad.descriptor).equals(xuid, true)) {
+                    PadProfiles.clearChoice(appContext, pad.descriptor)
+                }
+            }
+            if (descriptor != null) PadProfiles.setChoice(appContext, descriptor, xuid)
+        }
+        refresh()
+    }
+
+    fun connectedControllers(): List<GamepadDevice> = connectedGamepads()
+
+    private fun slotKey(slot: Int) = "logged_profile_slot_${slot}_xuid"
+
+    private fun slotXuids(): List<String> {
         val h = configStore.openLiveSnapshot()
         return try {
-            h.getString("Profiles", "logged_profile_slot_0_xuid") ?: ""
+            (0 until SLOT_COUNT).map { h.getString("Profiles", slotKey(it)) ?: "" }
         } finally {
             h.closeString()
         }
     }
 
-    private fun writeActiveXuid(xuid: String) {
+    /** Written as a whole set: a profile occupies at most one slot, so assigning
+     *  it has to clear wherever it was. */
+    private fun writeSlots(xuids: List<String>) {
         val h = configStore.openLive()
         try {
-            h.putString("Profiles", "logged_profile_slot_0_xuid", xuid)
+            for (slot in 0 until SLOT_COUNT) {
+                h.putString("Profiles", slotKey(slot), xuids.getOrElse(slot) { "" })
+            }
         } finally {
             h.closeFile()
         }

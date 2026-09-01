@@ -6,6 +6,7 @@
 #include <android/native_window_jni.h>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace ae{
     constexpr int BOOT_TYPE_WITH_PATH=1;
@@ -31,7 +32,19 @@ namespace ae{
     extern void surface_resize(int width, int height);
 
     extern void main_thr();
-    extern void key_event(int key_code,bool pressed,int value);
+    struct input_device_entry{
+        int device_slot;
+        std::string stable_id;
+        std::string display_name;
+        int guest_slot;
+    };
+    extern void key_event(int device_slot,int key_code,bool pressed,int value);
+    extern int input_attach_device(const char* stable_id,const char* display_name,int subtype,int preferred_slot);
+    extern void input_detach_device(int device_slot);
+    extern std::vector<input_device_entry> input_list_devices();
+    extern bool input_bind_slot(int guest_slot,int device_slot);
+    extern void input_unbind_slot(int guest_slot);
+    extern std::vector<uint16_t> input_vibration_state();
     extern bool is_running();
     extern bool is_paused();
     extern void pause();

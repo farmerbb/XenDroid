@@ -144,7 +144,7 @@ class AppContainer(context: Context) {
                 require(modelClass == KeymapViewModel::class.java) {
                     "Unknown ViewModel ${modelClass.name}"
                 }
-                return KeymapViewModel(keymapStore) as T
+                return KeymapViewModel(appContext, keymapStore) as T
             }
         }
 }

@@ -804,19 +804,101 @@ namespace ae{
 
     }
 
-    void key_event(int key_code,bool pressed,int value){
+    // The android driver is always drivers_[0]: create_input_drivers registers
+    // exactly one factory.
+    static xe::hid::android::AndroidInputDriver* android_input_driver(){
         static const bool is_android=cvars::hid=="android";
-        if(!is_android) return;
-        // Every hop can still be null while the detached boot thread builds the emulator,
-        // and input arrives in that window: a controller press on the boot splash, or the
-        // touch overlay releasing its keys as it leaves composition.
-        if(!g_windowed_app_ref || !g_windowed_app_ref->emu) return;
-        xe::hid::InputSystem* input_system=g_windowed_app_ref->emu->input_system();
-        // driver(0) indexes the vector, so the count must be checked, not the pointer.
-        if(!input_system || input_system->driver_count()==0) return;
-        auto* driver=reinterpret_cast<xe::hid::android::AndroidInputDriver*>(input_system->driver(0));
-        if(!driver) return;
-        driver->OnKey(key_code,pressed,value);
+        // Every hop can still be null while the detached boot thread builds the
+        // emulator, and input arrives in that window: a press on the boot splash,
+        // or the touch overlay releasing its keys as it leaves composition.
+        if(!is_android || !g_windowed_app_ref || !g_windowed_app_ref->emu){
+            return nullptr;
+        }
+        auto* input_system=g_windowed_app_ref->emu->input_system();
+        // driver(0) indexes the vector, so check the count, not the pointer.
+        if(!input_system || input_system->driver_count()==0){
+            return nullptr;
+        }
+        return reinterpret_cast<xe::hid::android::AndroidInputDriver*>(input_system->driver(0));
+    }
+
+    void key_event(int device_slot,int key_code,bool pressed,int value){
+        if(auto* driver=android_input_driver()){
+            driver->OnKey(device_slot,key_code,pressed,value);
+        }
+    }
+
+    int input_attach_device(const char* stable_id,const char* display_name,int subtype,int preferred_slot){
+        auto* driver=android_input_driver();
+        if(!driver){
+            return -1;
+        }
+        return driver->AttachDevice(stable_id?stable_id:"",display_name?display_name:"",
+                                    uint8_t(subtype),int8_t(preferred_slot));
+    }
+
+    void input_detach_device(int device_slot){
+        if(auto* driver=android_input_driver()){
+            driver->DetachDevice(device_slot);
+        }
+    }
+
+    std::vector<input_device_entry> input_list_devices(){
+        std::vector<input_device_entry> out;
+        auto* driver=android_input_driver();
+        if(!driver){
+            return out;
+        }
+        auto* input_system=g_windowed_app_ref->emu->input_system();
+        // EnumerateDevices/BindSlot/UnbindSlot mutate the binding table without
+        // locking themselves; the guest polls GetState off other threads.
+        auto lock=input_system->lock();
+        for(const auto& device:input_system->EnumerateDevices()){
+            if(device.driver!=driver){
+                continue;
+            }
+            input_device_entry entry;
+            entry.device_slot=device.info.driver_slot;
+            entry.stable_id=device.info.stable_id;
+            entry.display_name=device.info.display_name;
+            entry.guest_slot=device.bound_slot;
+            out.push_back(std::move(entry));
+        }
+        return out;
+    }
+
+    bool input_bind_slot(int guest_slot,int device_slot){
+        auto* driver=android_input_driver();
+        if(!driver || guest_slot<0 || guest_slot>=xe::XUserMaxUserCount){
+            return false;
+        }
+        auto* input_system=g_windowed_app_ref->emu->input_system();
+        auto lock=input_system->lock();
+        for(const auto& device:input_system->EnumerateDevices()){
+            if(device.driver==driver && device.info.driver_slot==device_slot){
+                input_system->BindSlot(uint32_t(guest_slot),driver,uint8_t(device_slot),
+                                       device.info.stable_id,device.info.display_name);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::vector<uint16_t> input_vibration_state(){
+        auto* driver=android_input_driver();
+        if(!driver){
+            return {};
+        }
+        return driver->VibrationState();
+    }
+
+    void input_unbind_slot(int guest_slot){
+        if(!android_input_driver() || guest_slot<0 || guest_slot>=xe::XUserMaxUserCount){
+            return;
+        }
+        auto* input_system=g_windowed_app_ref->emu->input_system();
+        auto lock=input_system->lock();
+        input_system->UnbindSlot(uint32_t(guest_slot));
     }
     bool is_running(){
         if(!g_windowed_app_ref || !g_windowed_app_ref->emu) return false;

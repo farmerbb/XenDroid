@@ -67,6 +67,8 @@ import xendroid.compose.ui.pause.PAUSE_OPTION_TOUCH_OVERLAY
 import xendroid.compose.ui.pause.PAUSE_OPTION_RESUME
 import xendroid.compose.ui.pause.PauseMenuPanel
 import xendroid.compose.ui.theme.xendroidTheme
+import xendroid.compose.gamepad.ControllerRegistry
+import xendroid.compose.gamepad.RumbleDriver
 import xendroid.compose.gamepad.GamepadConfigDto
 import xendroid.compose.gamepad.GamepadController
 import xendroid.compose.gamepad.GamepadOverlay
@@ -85,6 +87,8 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
     companion object {
         private const val TAG = "EmuHost"
         private const val KEYBOARD_POLL_MS = 150L
+        private const val RUMBLE_POLL_MS = 32L
+        private const val TRIGGER_DEADZONE = 0.02f
         const val EXTRA_GAME_URI = "game_uri"   // keys must match GameLibraryViewModel
         const val EXTRA_DISC_LABELS = "disc_labels"
         const val EXTRA_DISC_PATHS = "disc_paths"
@@ -138,10 +142,12 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     // Falls back to GameButtons.DEFAULT_LOOKUP until KeymapStore loads in onCreate.
     @Volatile private var keyMap: Map<Int, Int> = GameButtons.DEFAULT_LOOKUP
+    @Volatile private var keyMapByDevice: Map<String, Map<Int, Int>> = emptyMap()
+    // Cached per Android device id so a keystroke never re-queries InputDevice.
+    private val keyMapForDevice = HashMap<Int, Map<Int, Int>>()
     private var vibrator: Vibrator? = null
-    // Edge-detect state for analog triggers reported as axes.
-    private var lTriggerDown = false
-    private var rTriggerDown = false
+    private val controllers = ControllerRegistry(session)
+    private val rumble by lazy { RumbleDriver(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -150,6 +156,8 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
         // Keep the launcher out of the cached band so lmkd stops reaping it mid-game, and
         // notice if the main process dies anyway.
         EmuProcessLink.bindToMainProcess(this)
+
+        controllers.start(this)
 
         val gameUri = FrontendLaunch.resolveGamePath(this, intent)
         if (gameUri.isNullOrEmpty()) {
@@ -170,6 +178,10 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
                 EmulatorRuntime.ensureLoaded()            // idempotent; lazy on Adreno 5xx/6xx
                 store.androidToGameKey.firstOrNull() ?: GameButtons.DEFAULT_LOOKUP
             }
+            keyMapByDevice = withContext(Dispatchers.IO) {
+                store.androidToGameKeyByDevice.firstOrNull() ?: emptyMap()
+            }
+            synchronized(keyMapForDevice) { keyMapForDevice.clear() }
             // show_debug_overlay lives in the native TOML config, not SharedPreferences;
             // read it off-main via ConfigStore.
             showFpsOverlay.value = withContext(Dispatchers.IO) { readShowDebugOverlay() }
@@ -287,7 +299,7 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
                             onUserInteraction = poke,
                             onKeyEvent = { kc, pressed, v ->
                                 if (pressed && v == Kc.VALUE_UNUSED) maybeVibrate()
-                                session.keyEvent(kc, pressed, v)
+                                session.keyEvent(controllers.touchSlot(), kc, pressed, v)
                             },
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -391,6 +403,22 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
                             )
                         }
                     }
+
+                    LaunchedEffect(booted) {
+                        if (!booted) return@LaunchedEffect
+                        try {
+                            while (isActive) {
+                                val state = session.vibrationState()
+                                if (state.isNotEmpty()) {
+                                    rumble.apply(state) { slot -> vibratorForSlot(slot) }
+                                }
+                                delay(RUMBLE_POLL_MS)
+                            }
+                        } finally {
+                            rumble.stopAll { slot -> vibratorForSlot(slot) }
+                        }
+                    }
+
                 }
 
                 // Back / swipe-back PAUSES the game and opens a Quit menu instead of leaving to
@@ -482,6 +510,7 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     override fun onPause() {
+        rumble.stopAll { slot -> vibratorForSlot(slot) }
         super.onPause()
         session.flushGpuCaches()
     }
@@ -511,6 +540,7 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     override fun onDestroy() {
         super.onDestroy()
+        controllers.stop()
         // A pending prompt must not hold a dispatch thread through teardown.
         keyboardRequestState.value = null
         session.keyboardCancelAll()
@@ -531,10 +561,10 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
             // Swallow the rest so neither the game nor an OEM overlay reacts behind it.
             if (consumeIfGamepad(event)) return true
         }
-        val gameKey = keyMap[keyCode]
+        val gameKey = keyMapFor(event.deviceId)[keyCode]
             ?: return consumeIfGamepad(event) || super.onKeyDown(keyCode, event)
         if (event.repeatCount == 0) {
-            session.keyEvent(gameKey, true, KEY_VALUE_UNUSED)
+            session.keyEvent(deviceSlotFor(event.deviceId), gameKey, true, KEY_VALUE_UNUSED)
             return true
         }
         return super.onKeyDown(keyCode, event)            // ignore auto-repeats
@@ -544,11 +574,40 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
         if (panelNav() != null && (isPanelKey(keyCode) || consumeIfGamepad(event))) {
             return true
         }
-        val gameKey = keyMap[keyCode]
+        val gameKey = keyMapFor(event.deviceId)[keyCode]
             ?: return consumeIfGamepad(event) || super.onKeyUp(keyCode, event)
-        session.keyEvent(gameKey, false, KEY_VALUE_UNUSED)
+        session.keyEvent(deviceSlotFor(event.deviceId), gameKey, false, KEY_VALUE_UNUSED)
         return true
     }
+
+    // Only the first pad may claim the console's own motor, so a second motorless
+    // pad cannot buzz the handheld on player 1's behalf.
+    private fun vibratorForSlot(deviceSlot: Int) =
+        rumble.vibratorForDevice(
+            controllers.androidDeviceIdFor(deviceSlot),
+            fallbackToSystem = deviceSlot == controllers.firstPadSlot(),
+        )
+
+
+
+
+    /** Wraps past player 4 to unmapped. */
+
+    /** Keyboards and remotes keep feeding the overlay's slot. */
+    /** A device's own mapping if it declared one, else the shared mapping. */
+    private fun keyMapFor(deviceId: Int): Map<Int, Int> {
+        if (keyMapByDevice.isEmpty()) return keyMap
+        synchronized(keyMapForDevice) { keyMapForDevice[deviceId] }?.let { return it }
+        val descriptor = InputDevice.getDevice(deviceId)?.descriptor
+        val resolved = descriptor
+            ?.let { keyMapByDevice[KeymapStore.sanitize(it)] }
+            ?: keyMap
+        synchronized(keyMapForDevice) { keyMapForDevice[deviceId] = resolved }
+        return resolved
+    }
+
+    private fun deviceSlotFor(deviceId: Int): Int =
+        controllers.padFor(deviceId)?.deviceSlot ?: controllers.touchSlot()
 
     /** Consumes unmapped controller buttons (never BACK): unhandled gamepad input is what
      *  OEM overlays latch onto. */
@@ -566,97 +625,91 @@ class EmulatorHostActivity : ComponentActivity(), SurfaceHolder.Callback {
             panelHat(nav, event)
             return true
         }
+        val pad = controllers.padFor(event.deviceId) ?: return super.onGenericMotionEvent(event)
         // No early return: sticks/triggers must still process while a hat is held.
-        val hatHandled = isNonDpadSource(event) && handleHat(event)
+        val hatHandled = isNonDpadSource(event) && handleHat(pad, event)
         if (event.source and InputDevice.SOURCE_JOYSTICK != InputDevice.SOURCE_JOYSTICK) {
             return hatHandled || super.onGenericMotionEvent(event)
         }
-        emitAxisPair(event.getAxisValue(MotionEvent.AXIS_X),
+        emitAxisPair(pad, event.getAxisValue(MotionEvent.AXIS_X),
             negKey = KC_LTHUMB_LEFT, posKey = KC_LTHUMB_RIGHT, invert = false)
-        emitAxisPair(event.getAxisValue(MotionEvent.AXIS_Y),
+        emitAxisPair(pad, event.getAxisValue(MotionEvent.AXIS_Y),
             negKey = KC_LTHUMB_UP, posKey = KC_LTHUMB_DOWN, invert = true)
-        emitAxisPair(event.getAxisValue(MotionEvent.AXIS_Z),
+        emitAxisPair(pad, event.getAxisValue(MotionEvent.AXIS_Z),
             negKey = KC_RTHUMB_LEFT, posKey = KC_RTHUMB_RIGHT, invert = false)
-        emitAxisPair(event.getAxisValue(MotionEvent.AXIS_RZ),
+        emitAxisPair(pad, event.getAxisValue(MotionEvent.AXIS_RZ),
             negKey = KC_RTHUMB_UP, posKey = KC_RTHUMB_DOWN, invert = true)
         // Most pads report triggers as ANALOG axes (LTRIGGER/RTRIGGER, or BRAKE/GAS). Emit a
         // press past the threshold, edge-detected so we don't spam.
-        lTriggerDown = emitTrigger(
+        emitTrigger(pad,
             maxOf(event.getAxisValue(MotionEvent.AXIS_LTRIGGER), event.getAxisValue(MotionEvent.AXIS_BRAKE)),
-            KC_TRIGGER_L, lTriggerDown)
-        rTriggerDown = emitTrigger(
+            KC_TRIGGER_L)
+        emitTrigger(pad,
             maxOf(event.getAxisValue(MotionEvent.AXIS_RTRIGGER), event.getAxisValue(MotionEvent.AXIS_GAS)),
-            KC_TRIGGER_R, rTriggerDown)
+            KC_TRIGGER_R)
         return true
     }
 
-    /** Analog trigger -> digital game key. Emits only on the down/up edge (>0.5 = down). */
-    private fun emitTrigger(value: Float, gameKey: Int, wasDown: Boolean): Boolean {
-        val down = value > 0.5f
-        if (down != wasDown) session.keyEvent(gameKey, down, KEY_VALUE_UNUSED)
-        return down
+    /** Analog trigger -> the guest's 0-255 trigger byte. Thresholding it to a
+     *  button threw away the whole travel range. */
+    private fun emitTrigger(pad: ControllerRegistry.PadState, value: Float, gameKey: Int) {
+        val v = if (value < TRIGGER_DEADZONE) 0f else value
+        val scaled = (v * 255f).toInt().coerceIn(0, 255)
+        emitAxis(pad, gameKey, scaled > 0, scaled)
     }
 
     /** For one axis emit the opposing thumb directions, scaled to signed-short range.
      *  invert flips sign first (screen Y is up-negative; X360 up is positive). */
-    private fun emitAxisPair(axis: Float, negKey: Int, posKey: Int, invert: Boolean) {
+    private fun emitAxisPair(pad: ControllerRegistry.PadState, axis: Float, negKey: Int, posKey: Int, invert: Boolean) {
         val raw = if (invert) -axis else axis
         // Snap to exactly zero so emitAxis' equality check can match.
         val v = if (abs(raw) < AXIS_DEADZONE) 0f else raw
         when {
             v < 0f -> {
-                emitAxis(posKey, false, 0)
-                emitAxis(negKey, true, (v * 32768f).toInt())
+                emitAxis(pad, posKey, false, 0)
+                emitAxis(pad, negKey, true, (v * 32768f).toInt())
             }
             v > 0f -> {
-                emitAxis(negKey, false, 0)
-                emitAxis(posKey, true, (v * 32767f).toInt())
+                emitAxis(pad, negKey, false, 0)
+                emitAxis(pad, posKey, true, (v * 32767f).toInt())
             }
             else -> {
-                emitAxis(negKey, false, 0)
-                emitAxis(posKey, false, 0)
+                emitAxis(pad, negKey, false, 0)
+                emitAxis(pad, posKey, false, 0)
             }
         }
     }
 
-    // Last value pushed per analog code: motion events arrive per sample (~120Hz x 4 axes)
-    // and mostly repeat, so without this every sample costs ~10 JNI calls.
-    private val axisPressed = BooleanArray(24)
-    private val axisValue = IntArray(24) { Int.MIN_VALUE }
-
-    private fun emitAxis(code: Int, pressed: Boolean, value: Int) {
-        if (axisPressed[code] == pressed && axisValue[code] == value) return
-        axisPressed[code] = pressed
-        axisValue[code] = value
-        session.keyEvent(code, pressed, value)
+    // Last value pushed per analog code (per pad): motion events arrive per sample
+    // (~120Hz x 4 axes) and mostly repeat, so without this every sample costs ~10 JNI calls.
+    private fun emitAxis(pad: ControllerRegistry.PadState, code: Int, pressed: Boolean, value: Int) {
+        if (pad.axisPressed[code] == pressed && pad.axisValue[code] == value) return
+        pad.axisPressed[code] = pressed
+        pad.axisValue[code] = value
+        session.keyEvent(pad.deviceSlot, code, pressed, value)
     }
 
-    // Hat D-pad state, edge-detected: the hat only releases what IT pressed, so it can't
-    // clobber a D-pad held via real KEYCODE_DPAD_* key events.
-    private var hatLeft = false
-    private var hatUp = false
-    private var hatRight = false
-    private var hatDown = false
-
-    /** Hat axes -> D-pad; thresholds, not ==+-1f (some pads are inexact). */
-    private fun handleHat(event: MotionEvent): Boolean {
+    /** Hat axes -> D-pad; thresholds, not ==+-1f (some pads are inexact). Edge-detected per
+     *  pad: the hat only releases what IT pressed, so it can't clobber a D-pad held via real
+     *  KEYCODE_DPAD_* key events. */
+    private fun handleHat(pad: ControllerRegistry.PadState, event: MotionEvent): Boolean {
         val hx = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val hy = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
         val left = hx < -0.5f
         val right = hx > 0.5f
         val up = hy < -0.5f
         val down = hy > 0.5f
-        if (left != hatLeft) {
-            session.keyEvent(KC_DPAD_LEFT, left, KEY_VALUE_UNUSED); hatLeft = left
+        if (left != pad.hatLeft) {
+            session.keyEvent(pad.deviceSlot, KC_DPAD_LEFT, left, KEY_VALUE_UNUSED); pad.hatLeft = left
         }
-        if (right != hatRight) {
-            session.keyEvent(KC_DPAD_RIGHT, right, KEY_VALUE_UNUSED); hatRight = right
+        if (right != pad.hatRight) {
+            session.keyEvent(pad.deviceSlot, KC_DPAD_RIGHT, right, KEY_VALUE_UNUSED); pad.hatRight = right
         }
-        if (up != hatUp) {
-            session.keyEvent(KC_DPAD_UP, up, KEY_VALUE_UNUSED); hatUp = up
+        if (up != pad.hatUp) {
+            session.keyEvent(pad.deviceSlot, KC_DPAD_UP, up, KEY_VALUE_UNUSED); pad.hatUp = up
         }
-        if (down != hatDown) {
-            session.keyEvent(KC_DPAD_DOWN, down, KEY_VALUE_UNUSED); hatDown = down
+        if (down != pad.hatDown) {
+            session.keyEvent(pad.deviceSlot, KC_DPAD_DOWN, down, KEY_VALUE_UNUSED); pad.hatDown = down
         }
         return left || right || up || down
     }
