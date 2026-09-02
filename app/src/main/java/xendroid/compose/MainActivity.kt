@@ -122,6 +122,7 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                /*
                 LaunchedEffect(Unit) {
                     if (frontendGame != null) return@LaunchedEffect
                     // A debug build's -debug versionName never matches a release tag, so the
@@ -148,6 +149,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                */
 
                 when (val result = updateResult) {
                     is UpdateResult.Available -> {
